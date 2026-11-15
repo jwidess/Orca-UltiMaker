@@ -1051,19 +1051,29 @@ static nlohmann::json build_lava_meta(
     // fields (see birdwing_makerbot_extrakte_befunde.md) and answers a mismatch
     // with print_extruder_mismatch, so they must not stay single-valued on a
     // dual-material job.
+    nlohmann::json ext_dists  = nlohmann::json::array();
+    nlohmann::json ext_masses = nlohmann::json::array();
     if (tp && tp->dual) {
         const double m0 = extrusion_mass_g(tp->extrusion[0], h.filament_diameter, h.filament_density);
         const double m1 = extrusion_mass_g(tp->extrusion[1], h.filament_diameter, h.filament_density);
         meta["extrusion_distance_mm"]  = tp->extrusion[0] + tp->extrusion[1];
-        meta["extrusion_distances_mm"] = nlohmann::json::array({tp->extrusion[0], tp->extrusion[1]});
+        ext_dists.push_back(tp->extrusion[0]);
+        ext_dists.push_back(tp->extrusion[1]);
         meta["extrusion_mass_g"]       = m0 + m1;
-        meta["extrusion_masses_g"]     = nlohmann::json::array({m0, m1});
+        ext_masses.push_back(m0);
+        ext_masses.push_back(m1);
     } else {
         meta["extrusion_distance_mm"]  = total_extrusion;
-        meta["extrusion_distances_mm"] = nlohmann::json::array({total_extrusion});
+        ext_dists.push_back(total_extrusion);
         meta["extrusion_mass_g"]       = mass_g;
-        meta["extrusion_masses_g"]     = nlohmann::json::array({mass_g});
+        ext_masses.push_back(mass_g);
     }
+    // Method series firmware requires extrusion_distances_mm and extrusion_masses_g
+    // to match tool_types length exactly (Error 1011 occurs if length mismatches).
+    while (ext_dists.size() < tools.size()) ext_dists.push_back(0.0);
+    while (ext_masses.size() < tools.size()) ext_masses.push_back(0.0);
+    meta["extrusion_distances_mm"] = ext_dists;
+    meta["extrusion_masses_g"]     = ext_masses;
     meta["material"]                = mat_lo;
     // materials mirrors tool_types: one material name per configured extruder.
     {

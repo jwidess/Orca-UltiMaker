@@ -104,6 +104,30 @@ static std::string orca_type_to_birdwing_tag(const std::string& orca_type)
     return "Infill"; // sicherer Default
 }
 
+// -- Tag-Mapping: Orca ;TYPE: -> Method (Lava) Bead Mode Tag ------------------
+static std::string orca_type_to_lava_tag(const std::string& orca_type, int tool)
+{
+    const std::string t = std::to_string(tool == 1 ? 1 : 0);
+    if (orca_type == "Outer wall")             return "WALL_OUTER_" + t;
+    if (orca_type == "Overhang wall")          return "WALL_OUTER_" + t;
+    if (orca_type == "Inner wall")             return "WALL_INNER_" + t;
+    if (orca_type == "Sparse infill")          return "FILL_" + t;
+    if (orca_type == "Internal solid infill")  return "FILL_" + t;
+    if (orca_type == "Bottom surface")         return "FILL_" + t;
+    if (orca_type == "Bridge")                 return "FILL_" + t;
+    if (orca_type == "Internal Bridge")        return "FILL_" + t;
+    if (orca_type == "Top surface")            return "TOP_SURFACE_" + t;
+    if (orca_type == "Support")                return "SUPPORT_" + t;
+    if (orca_type == "Support interface")      return "SUPPORT_INTERFACE_" + t;
+    if (orca_type == "Support transition")     return "SUPPORT_" + t;
+    if (orca_type == "Skirt")                  return "SKIRT_" + t;
+    if (orca_type == "Brim")                   return "SKIRT_" + t;
+    if (orca_type == "Prime tower")            return "PRIME_TOWER_" + t;
+    if (orca_type == "Custom")                 return ""; // start/end gcode -> skip
+    if (orca_type == "Ironing")                return "FILL_" + t;
+    return "FILL_" + t;
+}
+
 // -- G-code-Parameter parsen (z.B. "X123.45" -> 123.45) -----------------------
 static bool parse_gcode_param(const std::string& token, char axis, double& out)
 {
@@ -315,7 +339,9 @@ std::string gcode_to_birdwing_jsontoolpath(
             }
         }
     }
-    g_dual_axes = dual_job;
+    // On Method series (lava_format), the motion planner strictly requires 5 axes
+    // (x, y, z, a, b) on all moves and relative.b = True even for single-extruder jobs.
+    g_dual_axes = dual_job || g_lava_format;
 
     // A tool index beyond 1 would silently lose all its extrusion:
     // make_move_params() puts 0.0 on both axes for an unknown tool, so the
@@ -426,7 +452,7 @@ std::string gcode_to_birdwing_jsontoolpath(
     const double TOOLCHANGE_RETRACT = 1.0;
     const double TOOLCHANGE_FEEDRATE = 5.0;
 
-    std::string current_tag = "Outline";
+    std::string current_tag = g_lava_format ? "WALL_OUTER_0" : "Outline";
     double      layer_w     = bv.layer_width;
 
     // Fan and temperature state: emit only on change, otherwise
@@ -434,6 +460,7 @@ std::string gcode_to_birdwing_jsontoolpath(
     double last_fan_value   = -1.0;   // 0.0-1.0, -1 = not set yet
     bool   fan_is_on        = false;
     double last_tool_temp   = -1.0;
+    bool   lava_init_emitted = false;
 
     std::string line;
     while (std::getline(f, line)) {
@@ -450,7 +477,9 @@ std::string gcode_to_birdwing_jsontoolpath(
         // ;TYPE:xxx - classification of the following moves
         if (!comment.empty() && comment.find("TYPE:") == 0) {
             const std::string type = boost::trim_copy(comment.substr(5));
-            const std::string new_tag = orca_type_to_birdwing_tag(type);
+            const std::string new_tag = g_lava_format
+                ? orca_type_to_lava_tag(type, active_tool)
+                : orca_type_to_birdwing_tag(type);
             if (new_tag.empty()) {
                 // "Custom" -> start/end G-code -> Ausgabe pausieren
                 in_print_area = false;
@@ -555,6 +584,18 @@ std::string gcode_to_birdwing_jsontoolpath(
                         nlohmann::json::array(),
                         false));
                     last_tool_temp = t;
+
+                    if (g_lava_format && target == 0 && !lava_init_emitted) {
+                        lava_init_emitted = true;
+                        commands.push_back(make_command("change_toolhead",
+                            {{"index", 0}}, nlohmann::json::array(), false));
+                        commands.push_back(make_command("wait_for_temperature",
+                            {{"index", 0}}, nlohmann::json::array(), false));
+                        commands.push_back(make_command("toggle_fan",
+                            {{"index", 0}, {"value", false}}, nlohmann::json::array(), false));
+                        commands.push_back(make_command("toggle_fan",
+                            {{"index", 1}, {"value", false}}, nlohmann::json::array(), false));
+                    }
                 }
             }
             continue;
@@ -690,6 +731,24 @@ std::string gcode_to_birdwing_jsontoolpath(
             // Before the print area: emit no moves
             if (!in_print_area && !in_custom_block) continue;
 
+            if (g_lava_format && !lava_init_emitted) {
+                lava_init_emitted = true;
+                const int init_t = (tool_temp[0] > 0.0) ? static_cast<int>(tool_temp[0] + 0.5) : 215;
+                if (last_tool_temp < 0.0) {
+                    commands.push_back(make_command("set_toolhead_temperature",
+                        {{"index", 0}, {"temperature", init_t}}, nlohmann::json::array(), false));
+                    last_tool_temp = init_t;
+                }
+                commands.push_back(make_command("change_toolhead",
+                    {{"index", 0}}, nlohmann::json::array(), false));
+                commands.push_back(make_command("wait_for_temperature",
+                    {{"index", 0}}, nlohmann::json::array(), false));
+                commands.push_back(make_command("toggle_fan",
+                    {{"index", 0}, {"value", false}}, nlohmann::json::array(), false));
+                commands.push_back(make_command("toggle_fan",
+                    {{"index", 1}, {"value", false}}, nlohmann::json::array(), false));
+            }
+
             // No XY move -> pure retract / unretract / Z-hop -> handled separately
             const bool has_xy = has_x || has_y;
 
@@ -748,6 +807,9 @@ std::string gcode_to_birdwing_jsontoolpath(
                     nlohmann::json::array(), false));
 
                 active_tool = new_tool;
+                if (g_lava_format && current_tag.size() >= 2 && current_tag[current_tag.size() - 2] == '_') {
+                    current_tag.back() = (active_tool == 1) ? '1' : '0';
+                }
                 pending_tool = -1;
                 ++toolchanges;
 
@@ -964,8 +1026,24 @@ std::string gcode_to_birdwing_jsontoolpath(
                      : std::string());
 
     // Reset so a following conversion is not affected.
+    const bool was_lava = g_lava_format;
     g_dual_axes  = false;
     g_lava_format = false;
+
+    // Method series firmware (libparser.so) expects newline-delimited commands
+    // in print.jsontoolpath, whereas commands.dump() emits a single line.
+    if (was_lava) {
+        std::string out = "[\n";
+        for (size_t i = 0; i < commands.size(); ++i) {
+            out += commands[i].dump();
+            if (i + 1 < commands.size())
+                out += ",\n";
+            else
+                out += "\n";
+        }
+        out += "]";
+        return out;
+    }
 
     return commands.dump();
 }
