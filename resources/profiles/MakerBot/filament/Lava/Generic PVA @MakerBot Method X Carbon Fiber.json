@@ -9,6 +9,9 @@
     "filament_type": [
         "PVA"
     ],
+    "default_filament_colour": [
+        "#00AEFF"
+    ],
     "compatible_printers": [
         "MakerBot Method X Carbon Fiber 0.4 nozzle"
     ],

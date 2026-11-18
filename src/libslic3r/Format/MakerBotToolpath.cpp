@@ -578,12 +578,15 @@ std::string gcode_to_birdwing_jsontoolpath(
                 tool_temp[target] = t;
                 // A temperature for the *other* extruder is only remembered, not
                 // emitted: the change sequence sets it at the right moment.
-                if (target == active_tool && std::abs(t - last_tool_temp) > 0.5) {
+                // Exception: turning off heaters (t < 1.0, e.g. M104 S0 in end gcode)
+                // must always be emitted immediately so both tools cool down.
+                if ((target == active_tool || t < 1.0) &&
+                    (std::abs(t - last_tool_temp) > 0.5 || target != active_tool)) {
                     commands.push_back(make_command("set_toolhead_temperature",
                         {{"index", target}, {"temperature", static_cast<int>(t + 0.5)}},
                         nlohmann::json::array(),
                         false));
-                    last_tool_temp = t;
+                    if (target == active_tool) last_tool_temp = t;
 
                     if (g_lava_format && target == 0 && !lava_init_emitted) {
                         lava_init_emitted = true;
@@ -998,6 +1001,16 @@ std::string gcode_to_birdwing_jsontoolpath(
                 bb_min_z = std::min(bb_min_z, nz);     bb_max_z = std::max(bb_max_z, nz);
                 bb_valid = true;
             }
+        }
+    }
+
+    // Ensure both toolhead heaters are shut down at end of print
+    if (g_lava_format) {
+        commands.push_back(make_command("set_toolhead_temperature",
+            {{"index", 0}, {"temperature", 0}}, nlohmann::json::array(), false));
+        if (g_dual_axes || dual_job) {
+            commands.push_back(make_command("set_toolhead_temperature",
+                {{"index", 1}, {"temperature", 0}}, nlohmann::json::array(), false));
         }
     }
 

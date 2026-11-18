@@ -49,5 +49,9 @@
     "support_top_z_distance": "0.2",
     "support_filament": "0",
     "support_line_width": "0.38",
-    "wall_sequence": "inner wall/outer wall"
+    "wall_sequence": "inner wall/outer wall",
+    "enable_prime_tower": "1",
+    "prime_tower_width": "25",
+    "prime_tower_brim_width": "3",
+    "prime_volume": "30"
 }

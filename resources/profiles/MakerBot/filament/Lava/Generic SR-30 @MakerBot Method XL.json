@@ -9,6 +9,9 @@
     "filament_type": [
         "SR-30"
     ],
+    "default_filament_colour": [
+        "#FF8000"
+    ],
     "compatible_printers": [
         "MakerBot Method XL 0.4 nozzle"
     ],
